@@ -772,7 +772,3 @@ st.caption(
     "NADRA Registration Policy Assistant | "
     f"{VERSION} | Effective {EFFECTIVE_DATE}"
 )
-
-st.caption(
-    "Developed by Raees Khan"
-)
