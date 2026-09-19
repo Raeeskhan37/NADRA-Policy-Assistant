@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Jupyter / Colab
+.ipynb_checkpoints/
+
+# Local files
+*.log
+.DS_Store
+
+# Credentials / keys
+*.pem
+*.key
+secrets.json
