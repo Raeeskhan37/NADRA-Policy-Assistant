@@ -1,0 +1,24 @@
+{
+  "document": {
+    "organization": "National Database and Registration Authority",
+    "division": "HQ Operations Division",
+    "document": "Registration Policy",
+    "version": "RP-6.0.2",
+    "identifier": "NADRA-Reg-Policy-6.0.2",
+    "status": "Approved",
+    "series": "RP-2015",
+    "creation_date": "16 Sep 2026",
+    "issue_date": "18 Sep 2026",
+    "effective_date": "21 Sep 2026",
+    "total_pages": 44
+  },
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_dimension": 384,
+  "similarity_metric": "cosine_similarity_via_normalized_inner_product",
+  "chunk_target_words": 800,
+  "chunk_max_words": 1000,
+  "chunk_overlap_words": 120,
+  "total_chunks": 65,
+  "faiss_index_file": "nadra_registration_policy.faiss",
+  "metadata_file": "nadra_registration_policy_metadata.json"
+}
