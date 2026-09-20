@@ -1,0 +1,12 @@
+{
+  "document": "NADRA Registration Policy 6.0.2",
+  "language": "Urdu",
+  "pages": 46,
+  "text_pages": 46,
+  "chunks": 156,
+  "embedding_model": "intfloat/multilingual-e5-base",
+  "embedding_dimension": 768,
+  "chunk_size": 900,
+  "chunk_overlap": 150,
+  "index_type": "FAISS IndexFlatIP"
+}
