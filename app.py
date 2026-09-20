@@ -1,6 +1,6 @@
 import json
 import os
-import re
+import pickle
 
 import faiss
 import numpy as np
@@ -21,24 +21,36 @@ st.set_page_config(
 
 
 # ============================================================
-# CONSTANTS
+# FILE PATHS
 # ============================================================
 
-FAISS_FILE = "nadra_registration_policy.faiss"
-METADATA_FILE = "nadra_registration_policy_metadata.json"
-CONFIG_FILE = "nadra_registration_policy_config.json"
+ENGLISH_FAISS = "nadra_registration_policy.faiss"
+ENGLISH_METADATA = "nadra_registration_policy_metadata.json"
+ENGLISH_CONFIG = "nadra_registration_policy_config.json"
 
-DEFAULT_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+URDU_FAISS = "urdu/nadra_urdu_6_0_2_v2.faiss"
+URDU_CHUNKS = "urdu/nadra_urdu_6_0_2_v2_chunks.pkl"
+URDU_CONFIG = "urdu/metadata.json"
+
+
+# ============================================================
+# MODELS
+# ============================================================
+
+ENGLISH_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+URDU_EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
+
 DEFAULT_LLM_MODEL = "openai/gpt-oss-120b"
 
 
 # ============================================================
-# BASIC STYLING
+# STYLING
 # ============================================================
 
 st.markdown(
     """
     <style>
+
     .main-title {
         font-size: 34px;
         font-weight: 700;
@@ -51,13 +63,6 @@ st.markdown(
         margin-top: 0;
     }
 
-    .source-box {
-        padding: 12px;
-        border-radius: 8px;
-        border: 1px solid #ddd;
-        margin-top: 10px;
-    }
-
     .page-badge {
         display: inline-block;
         padding: 4px 9px;
@@ -66,6 +71,14 @@ st.markdown(
         margin: 2px;
         font-size: 13px;
     }
+
+    .urdu-text {
+        direction: rtl;
+        text-align: right;
+        font-size: 18px;
+        line-height: 2;
+    }
+
     </style>
     """,
     unsafe_allow_html=True
@@ -73,256 +86,381 @@ st.markdown(
 
 
 # ============================================================
-# LOAD CONFIGURATION
+# LANGUAGE SELECTION
+# ============================================================
+
+language = st.radio(
+    "Language / زبان",
+    ["English", "اردو"],
+    horizontal=True
+)
+
+is_urdu = language == "اردو"
+
+
+# ============================================================
+# LOAD ENGLISH CONFIG
 # ============================================================
 
 @st.cache_data
-def load_config():
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+def load_english_config():
+
+    with open(
+        ENGLISH_CONFIG,
+        "r",
+        encoding="utf-8"
+    ) as f:
         return json.load(f)
 
 
-config = load_config()
+english_config = load_english_config()
 
 
 # ============================================================
-# LOAD FAISS INDEX
+# LOAD URDU CONFIG
+# ============================================================
+
+@st.cache_data
+def load_urdu_config():
+
+    with open(
+        URDU_CONFIG,
+        "r",
+        encoding="utf-8"
+    ) as f:
+        return json.load(f)
+
+
+urdu_config = load_urdu_config()
+
+
+# ============================================================
+# LOAD ENGLISH FAISS
 # ============================================================
 
 @st.cache_resource
-def load_faiss_index():
-    return faiss.read_index(FAISS_FILE)
+def load_english_index():
 
-
-faiss_index = load_faiss_index()
+    return faiss.read_index(
+        ENGLISH_FAISS
+    )
 
 
 # ============================================================
-# LOAD METADATA
+# LOAD URDU FAISS
+# ============================================================
+
+@st.cache_resource
+def load_urdu_index():
+
+    return faiss.read_index(
+        URDU_FAISS
+    )
+
+
+# ============================================================
+# LOAD ENGLISH METADATA
 # ============================================================
 
 @st.cache_data
-def load_metadata():
-    with open(METADATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+def load_english_metadata():
 
+    with open(
+        ENGLISH_METADATA,
+        "r",
+        encoding="utf-8"
+    ) as f:
 
-chunk_metadata = load_metadata()
+        data = json.load(f)
+
+    if isinstance(data, dict):
+
+        if "chunks" in data:
+            data = data["chunks"]
+
+        elif "metadata" in data:
+            data = data["metadata"]
+
+        elif "chunk_metadata" in data:
+            data = data["chunk_metadata"]
+
+        else:
+
+            values = list(data.values())
+
+            if values and isinstance(
+                values[0],
+                dict
+            ):
+                data = values
+
+    return data
 
 
 # ============================================================
-# NORMALIZE METADATA FORMAT
+# LOAD URDU CHUNKS
 # ============================================================
 
-if isinstance(chunk_metadata, dict):
+@st.cache_data
+def load_urdu_chunks():
 
-    # Common possible formats
-    if "chunks" in chunk_metadata:
-        chunk_metadata = chunk_metadata["chunks"]
+    with open(
+        URDU_CHUNKS,
+        "rb"
+    ) as f:
 
-    elif "metadata" in chunk_metadata:
-        chunk_metadata = chunk_metadata["metadata"]
+        data = pickle.load(f)
 
-    elif "chunk_metadata" in chunk_metadata:
-        chunk_metadata = chunk_metadata["chunk_metadata"]
+    return data
+
+
+# ============================================================
+# LOAD MODELS
+# ============================================================
+
+@st.cache_resource
+def load_model(model_name):
+
+    return SentenceTransformer(
+        model_name
+    )
+
+
+# ============================================================
+# SELECT ACTIVE DATASET
+# ============================================================
+
+if is_urdu:
+
+    faiss_index = load_urdu_index()
+
+    chunk_metadata = load_urdu_chunks()
+
+    embedding_model = load_model(
+        URDU_EMBEDDING_MODEL
+    )
+
+    document_name = urdu_config.get(
+        "document",
+        "NADRA Registration Policy 6.0.2"
+    )
+
+    version = "6.0.2"
+
+    effective_date = "21 Sep 2026"
+
+    status = "Approved"
+
+else:
+
+    faiss_index = load_english_index()
+
+    chunk_metadata = load_english_metadata()
+
+    embedding_model = load_model(
+        english_config.get(
+            "embedding_model",
+            ENGLISH_EMBEDDING_MODEL
+        )
+    )
+
+    document_info = english_config.get(
+        "document",
+        {}
+    )
+
+    if isinstance(
+        document_info,
+        dict
+    ):
+
+        document_name = document_info.get(
+            "document",
+            "Registration Policy"
+        )
+
+        version = document_info.get(
+            "version",
+            "RP-6.0.2"
+        )
+
+        effective_date = document_info.get(
+            "effective_date",
+            "21 Sep 2026"
+        )
+
+        status = document_info.get(
+            "status",
+            "Approved"
+        )
 
     else:
-        # Convert dictionary keyed by vector index
-        values = list(chunk_metadata.values())
 
-        if values and isinstance(values[0], dict):
-            chunk_metadata = values
+        document_name = "Registration Policy"
+        version = "RP-6.0.2"
+        effective_date = "21 Sep 2026"
+        status = "Approved"
 
 
-# Make sure FAISS index and metadata correspond
+# ============================================================
+# VALIDATE DATA
+# ============================================================
+
 if len(chunk_metadata) != faiss_index.ntotal:
 
     st.error(
-        f"FAISS/metadata mismatch: "
-        f"FAISS contains {faiss_index.ntotal} vectors, "
-        f"but metadata contains {len(chunk_metadata)} records."
+        f"FAISS/chunk mismatch. "
+        f"Index contains {faiss_index.ntotal} vectors "
+        f"but {len(chunk_metadata)} chunk records were loaded."
     )
 
     st.stop()
 
 
 # ============================================================
-# EMBEDDING MODEL
-# ============================================================
-
-@st.cache_resource
-def load_embedding_model(model_name):
-    return SentenceTransformer(model_name)
-
-
-embedding_model_name = config.get(
-    "embedding_model",
-    DEFAULT_EMBEDDING_MODEL
-)
-
-embedding_model = load_embedding_model(
-    embedding_model_name
-)
-
-
-# ============================================================
-# DOCUMENT INFORMATION
-# ============================================================
-
-DOCUMENT_NAME = config.get(
-    "document",
-    "Registration Policy"
-)
-
-VERSION = config.get(
-    "version",
-    "RP-6.0.2"
-)
-
-EFFECTIVE_DATE = config.get(
-    "effective_date",
-    "21 Sep 2026"
-)
-
-STATUS = config.get(
-    "status",
-    "Approved"
-)
-
-
-# ============================================================
-# GROQ CLIENT
+# GROQ
 # ============================================================
 
 try:
-    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+
+    GROQ_API_KEY = st.secrets[
+        "GROQ_API_KEY"
+    ]
+
 except Exception:
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+
+    GROQ_API_KEY = os.environ.get(
+        "GROQ_API_KEY"
+    )
 
 
 if not GROQ_API_KEY:
+
     st.error(
-        "GROQ_API_KEY is not configured. "
-        "Add it to Streamlit Secrets."
+        "GROQ_API_KEY is not configured."
     )
+
     st.stop()
 
 
-groq_client = Groq(api_key=GROQ_API_KEY)
-
-
-LLM_MODEL = config.get(
-    "llm_model",
-    DEFAULT_LLM_MODEL
+groq_client = Groq(
+    api_key=GROQ_API_KEY
 )
 
 
-# ============================================================
-# SEARCH HELPERS
-# ============================================================
-
-def normalize_for_search(text):
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def is_heading_only(text):
-
-    if not text:
-        return True
-
-    words = text.split()
-
-    if len(words) <= 12:
-        return True
-
-    return False
+LLM_MODEL = DEFAULT_LLM_MODEL
 
 
 # ============================================================
-# QUERY INTENT
+# TEXT EXTRACTION
 # ============================================================
 
-def detect_query_intent(query):
+def get_chunk_text(chunk):
 
-    q = normalize_for_search(query)
+    if isinstance(
+        chunk,
+        str
+    ):
+        return chunk
 
-    if any(x in q for x in [
-        "attestation",
-        "attest",
-        "who can attest",
-        "cnicf"
-    ]):
-        return "attestation"
+    if isinstance(
+        chunk,
+        dict
+    ):
 
-    if any(x in q for x in [
-        "cancellation",
-        "cancel identity",
-        "cancel cnic",
-        "cancel nicop",
-        "death"
-    ]):
-        return "cancellation"
+        for key in [
+            "text",
+            "content",
+            "chunk",
+            "page_text"
+        ]:
 
-    if any(x in q for x in [
-        "poc",
-        "pakistan origin card"
-    ]):
-        return "poc"
+            if key in chunk:
 
-    if any(x in q for x in [
-        "date of birth",
-        "dob",
-        "d o b",
-        "birth date",
-        "change dob"
-    ]):
-        return "dob_change"
+                return str(
+                    chunk[key]
+                )
 
-    if any(x in q for x in [
-        "fresh cnic",
-        "new cnic",
-        "new registration",
-        "fresh registration"
-    ]):
-        return "fresh_registration"
-
-    if any(x in q for x in [
-        "renewal",
-        "renew",
-        "reprint",
-        "re print",
-        "conversion"
-    ]):
-        return "conversion"
-
-    return "general"
+    return str(chunk)
 
 
 # ============================================================
-# QUERY RETRIEVAL
+# PAGE EXTRACTION
 # ============================================================
 
-def retrieve_policy_chunks(
-    query,
-    top_k=7
+def get_page(chunk):
+
+    if isinstance(
+        chunk,
+        dict
+    ):
+
+        return chunk.get(
+            "page",
+            "N/A"
+        )
+
+    return "N/A"
+
+
+# ============================================================
+# SECTION EXTRACTION
+# ============================================================
+
+def get_section(chunk):
+
+    if isinstance(
+        chunk,
+        dict
+    ):
+
+        return (
+            chunk.get(
+                "major_section",
+                ""
+            )
+            or chunk.get(
+                "section",
+                ""
+            )
+        )
+
+    return ""
+
+
+# ============================================================
+# RETRIEVAL
+# ============================================================
+
+def retrieve_chunks(
+    question,
+    top_k=6
 ):
 
-    query_embedding = embedding_model.encode(
+    query = question
+
+    # E5 models work better when the query
+    # is explicitly marked as a query.
+    if is_urdu:
+
+        query = "query: " + question
+
+    embedding = embedding_model.encode(
         [query],
         normalize_embeddings=True
     )
 
-    query_embedding = np.asarray(
-        query_embedding,
+    embedding = np.asarray(
+        embedding,
         dtype="float32"
     )
 
     scores, indices = faiss_index.search(
-        query_embedding,
-        top_k
+        embedding,
+        min(
+            top_k,
+            faiss_index.ntotal
+        )
     )
 
     results = []
@@ -337,181 +475,148 @@ def retrieve_policy_chunks(
 
         chunk = chunk_metadata[index]
 
-        if isinstance(chunk, dict):
-            item = dict(chunk)
-        else:
-            continue
-
-        item["score"] = float(score)
-        item["_index"] = int(index)
-
-        results.append(item)
+        results.append(
+            {
+                "text": get_chunk_text(
+                    chunk
+                ),
+                "page": get_page(
+                    chunk
+                ),
+                "section": get_section(
+                    chunk
+                ),
+                "score": float(
+                    score
+                ),
+                "index": int(
+                    index
+                )
+            }
+        )
 
     return results
 
 
 # ============================================================
-# EVIDENCE ASSEMBLY
+# BUILD EVIDENCE
 # ============================================================
 
-def retrieve_policy_evidence(
+def build_evidence(
     question,
-    primary_k=2,
-    supporting_k=4
+    results
 ):
 
-    results = retrieve_policy_chunks(
+    parts = []
+
+    parts.append(
+        f"DOCUMENT: {document_name}"
+    )
+
+    parts.append(
+        f"VERSION: {version}"
+    )
+
+    parts.append(
+        f"STATUS: {status}"
+    )
+
+    parts.append(
+        f"EFFECTIVE DATE: {effective_date}"
+    )
+
+    parts.append(
+        f"QUESTION: {question}"
+    )
+
+    parts.append(
+        "POLICY EVIDENCE:"
+    )
+
+    for i, item in enumerate(
+        results,
+        1
+    ):
+
+        parts.append(
+            f"""
+[EVIDENCE {i}]
+Page: {item["page"]}
+Section: {item["section"]}
+Similarity: {item["score"]:.4f}
+
+Content:
+{item["text"]}
+"""
+        )
+
+    return "\n".join(
+        parts
+    )
+
+
+# ============================================================
+# GENERATE ANSWER
+# ============================================================
+
+def generate_answer(
+    question
+):
+
+    results = retrieve_chunks(
         question,
-        top_k=7
+        top_k=6
     )
 
     if not results:
-        return {
-            "question": question,
-            "primary_evidence": [],
-            "supporting_evidence": [],
-            "evidence_text": ""
-        }
 
-    primary = results[:primary_k]
-
-    supporting = []
-
-    primary_ids = {
-        r.get("chunk_id")
-        for r in primary
-    }
-
-    primary_pages = {
-        r.get("page")
-        for r in primary
-    }
-
-    # Prefer supporting evidence from different pages
-    for r in results[primary_k:]:
-
-        if r.get("chunk_id") in primary_ids:
-            continue
-
-        if r.get("page") not in primary_pages:
-            supporting.append(r)
-
-        if len(supporting) >= supporting_k:
-            break
-
-    # Fill remaining supporting slots
-    if len(supporting) < supporting_k:
-
-        supporting_ids = {
-            r.get("chunk_id")
-            for r in supporting
-        }
-
-        for r in results[primary_k:]:
-
-            if r.get("chunk_id") in primary_ids:
-                continue
-
-            if r.get("chunk_id") in supporting_ids:
-                continue
-
-            supporting.append(r)
-            supporting_ids.add(r.get("chunk_id"))
-
-            if len(supporting) >= supporting_k:
-                break
-
-    # --------------------------------------------------------
-    # BUILD EVIDENCE TEXT
-    # --------------------------------------------------------
-
-    evidence_parts = []
-
-    evidence_parts.append(
-        f"DOCUMENT: {DOCUMENT_NAME}\n"
-        f"VERSION: {VERSION}\n"
-        f"STATUS: {STATUS}\n"
-        f"EFFECTIVE DATE: {EFFECTIVE_DATE}\n"
-    )
-
-    evidence_parts.append(
-        f"QUESTION:\n{question}\n"
-    )
-
-    evidence_parts.append(
-        "PRIMARY EVIDENCE:\n"
-    )
-
-    for i, r in enumerate(primary, 1):
-
-        score = r.get(
-            "final_score",
-            r.get("score", 0)
+        return (
+            "No relevant policy evidence was found.",
+            results
         )
 
-        evidence_parts.append(
-            f"[Primary Evidence {i}]\n"
-            f"Page: {r.get('page', 'N/A')}\n"
-            f"Section: {r.get('major_section', '')}\n"
-            f"Subsection: {r.get('subsection', '')}\n"
-            f"Content:\n{r.get('text', '')}\n"
-            f"Score: {score:.4f}\n"
-        )
-
-    if supporting:
-
-        evidence_parts.append(
-            "SUPPORTING EVIDENCE:\n"
-        )
-
-        for i, r in enumerate(
-            supporting,
-            1
-        ):
-
-            score = r.get(
-                "final_score",
-                r.get("score", 0)
-            )
-
-            evidence_parts.append(
-                f"[Supporting Evidence {i}]\n"
-                f"Page: {r.get('page', 'N/A')}\n"
-                f"Section: {r.get('major_section', '')}\n"
-                f"Subsection: {r.get('subsection', '')}\n"
-                f"Content:\n{r.get('text', '')}\n"
-                f"Score: {score:.4f}\n"
-            )
-
-    return {
-        "question": question,
-        "primary_evidence": primary,
-        "supporting_evidence": supporting,
-        "evidence_text": "\n".join(evidence_parts)
-    }
-
-
-# ============================================================
-# LLM ANSWER GENERATION
-# ============================================================
-
-def generate_policy_answer(question):
-
-    evidence = retrieve_policy_evidence(
-        question
+    evidence = build_evidence(
+        question,
+        results
     )
 
-    if not evidence["evidence_text"]:
-        return {
-            "answer": (
-                "The provided policy evidence does not "
-                "contain enough information to answer "
-                "this question."
-            ),
-            "evidence": evidence
-        }
+    if is_urdu:
 
-    system_prompt = """
+        system_prompt = """
+آپ NADRA Registration Policy کے معلوماتی معاون ہیں۔
+
+جواب صرف فراہم کردہ پالیسی کے شواہد کی بنیاد پر دیں۔
+
+اہم اصول:
+
+1. بیرونی معلومات استعمال نہ کریں۔
+2. کوئی شرط، دستاویز، فیس، طریقہ کار یا استثنا خود سے نہ بنائیں۔
+3. اگر شواہد کافی نہ ہوں تو واضح طور پر بتائیں۔
+4. پالیسی کی شرائط کو درست طور پر بیان کریں۔
+5. آسان اور واضح اردو استعمال کریں۔
+6. جہاں مناسب ہو بلٹس یا نمبر وار فہرست استعمال کریں۔
+7. ہر اہم پالیسی دعوے کے ساتھ [Page X] لکھیں۔
+8. صرف فراہم کردہ شواہد کے صفحات کو cite کریں۔
+9. آخر میں Policy Version اور Effective Date دیں۔
+10. FAISS، embeddings، chunks یا اندرونی تکنیکی نظام کا ذکر نہ کریں۔
+"""
+
+        user_prompt = f"""
+سوال:
+
+{question}
+
+پالیسی کے شواہد:
+
+{evidence}
+
+صرف اوپر دیے گئے شواہد کی بنیاد پر اردو میں جواب دیں۔
+متعلقہ معلومات کے ساتھ [Page X] citation ضرور دیں۔
+"""
+
+    else:
+
+        system_prompt = """
 You are a NADRA Registration Policy information assistant.
 
 Answer ONLY from the supplied policy evidence.
@@ -522,31 +627,27 @@ STRICT RULES:
 2. Do not invent requirements, documents, fees,
    procedures or exceptions.
 3. If the evidence is insufficient, clearly say so.
-4. Preserve conditions such as age and
-   resident/non-resident status.
-5. Clearly distinguish requirements from remarks.
-6. Use simple, practical language.
-7. Use bullets or numbered lists where useful.
-8. Every factual policy statement must have
-   a page citation.
-9. Page citations must use exactly:
-   [Page X]
-10. Do not cite unsupported pages.
-11. At the end provide:
+4. Preserve policy conditions accurately.
+5. Use simple, practical language.
+6. Use bullets or numbered lists where useful.
+7. Every factual policy statement should have
+   a [Page X] citation.
+8. Do not cite unsupported pages.
+9. At the end provide:
    Policy Version
    Effective Date
-12. Do not mention FAISS, embeddings, chunks,
-   retrieval or internal system details.
+10. Do not mention FAISS, embeddings, chunks,
+    retrieval or internal system details.
 """
 
-    user_prompt = f"""
+        user_prompt = f"""
 QUESTION:
 
 {question}
 
 POLICY EVIDENCE:
 
-{evidence["evidence_text"]}
+{evidence}
 
 Answer the question using ONLY the evidence above.
 
@@ -569,133 +670,240 @@ Include [Page X] citations after relevant statements.
         max_tokens=2500
     )
 
-    answer = response.choices[0].message.content
+    answer = response.choices[
+        0
+    ].message.content
 
-    return {
-        "answer": answer,
-        "evidence": evidence
-    }
+    return answer, results
 
 
 # ============================================================
 # HEADER
 # ============================================================
 
-st.markdown(
-    '<div class="main-title">🇵🇰 NADRA Policy Assistant</div>',
-    unsafe_allow_html=True
-)
+if is_urdu:
 
-st.markdown(
-    '<div class="subtitle">'
-    "AI-powered assistant for the NADRA Registration Policy"
-    "</div>",
-    unsafe_allow_html=True
-)
+    st.markdown(
+        '<div class="main-title">🇵🇰 نادرا پالیسی اسسٹنٹ</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        '<div class="subtitle">'
+        'نادرا رجسٹریشن پالیسی کے لیے معلوماتی معاون'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+else:
+
+    st.markdown(
+        '<div class="main-title">'
+        '🇵🇰 NADRA Policy Assistant'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
+    st.markdown(
+        '<div class="subtitle">'
+        'AI-powered assistant for the NADRA Registration Policy'
+        '</div>',
+        unsafe_allow_html=True
+    )
+
 
 st.divider()
 
 
 # ============================================================
-# DOCUMENT INFORMATION
+# POLICY INFORMATION
 # ============================================================
 
-with st.expander("📄 Policy Information"):
+with st.expander(
+    "📄 Policy Information"
+    if not is_urdu
+    else "📄 پالیسی کی معلومات"
+):
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.write("**Document**")
-        st.write(DOCUMENT_NAME)
+
+        st.write(
+            "**Document**"
+            if not is_urdu
+            else "**دستاویز**"
+        )
+
+        st.write(
+            document_name
+        )
 
     with col2:
-        st.write("**Version**")
-        st.write(VERSION)
+
+        st.write(
+            "**Version**"
+            if not is_urdu
+            else "**ورژن**"
+        )
+
+        st.write(
+            version
+        )
 
     with col3:
-        st.write("**Effective Date**")
-        st.write(EFFECTIVE_DATE)
+
+        st.write(
+            "**Effective Date**"
+            if not is_urdu
+            else "**مؤثر تاریخ**"
+        )
+
+        st.write(
+            effective_date
+        )
 
 
 # ============================================================
-# QUESTION INPUT
+# QUESTION
 # ============================================================
 
-st.subheader("Ask a Policy Question")
+if is_urdu:
 
-question = st.text_area(
-    "Enter your question",
-    placeholder=(
-        "Example: What are the requirements for "
-        "changing the date of birth?"
-    ),
-    height=120
-)
+    st.subheader(
+        "پالیسی سے متعلق سوال پوچھیں"
+    )
+
+    question = st.text_area(
+        "اپنا سوال درج کریں",
+        placeholder=(
+            "مثال: تاریخ پیدائش تبدیل کرنے "
+            "کے لیے کیا شرائط ہیں؟"
+        ),
+        height=120
+    )
+
+    ask_label = (
+        "🔎 نادرا پالیسی سے جواب حاصل کریں"
+    )
+
+else:
+
+    st.subheader(
+        "Ask a Policy Question"
+    )
+
+    question = st.text_area(
+        "Enter your question",
+        placeholder=(
+            "Example: What are the requirements "
+            "for changing the date of birth?"
+        ),
+        height=120
+    )
+
+    ask_label = (
+        "🔎 Ask NADRA Policy Assistant"
+    )
 
 
 ask = st.button(
-    "🔎 Ask NADRA Policy Assistant",
+    ask_label,
     type="primary",
     use_container_width=True
 )
 
 
 # ============================================================
-# PROCESS QUESTION
+# PROCESS
 # ============================================================
 
 if ask:
 
     if not question.strip():
 
-        st.warning(
-            "Please enter a policy question."
-        )
+        if is_urdu:
+
+            st.warning(
+                "براہ کرم پالیسی سے متعلق سوال درج کریں۔"
+            )
+
+        else:
+
+            st.warning(
+                "Please enter a policy question."
+            )
 
     else:
 
         with st.spinner(
-            "Searching the Registration Policy and preparing the answer..."
+            "جواب تیار کیا جا رہا ہے..."
+            if is_urdu
+            else
+            "Searching the policy and preparing the answer..."
         ):
 
             try:
 
-                result = generate_policy_answer(
+                answer, results = generate_answer(
                     question.strip()
                 )
 
-                st.subheader("Answer")
+                if is_urdu:
 
-                st.markdown(
-                    result["answer"]
-                )
+                    st.subheader(
+                        "جواب"
+                    )
+
+                    st.markdown(
+                        f'<div class="urdu-text">{answer}</div>',
+                        unsafe_allow_html=True
+                    )
+
+                else:
+
+                    st.subheader(
+                        "Answer"
+                    )
+
+                    st.markdown(
+                        answer
+                    )
 
                 st.divider()
 
-                # ------------------------------------------------
-                # SOURCE INFORMATION
-                # ------------------------------------------------
+                if is_urdu:
 
-                st.subheader("📚 Evidence Sources")
+                    st.subheader(
+                        "📚 حوالہ جات"
+                    )
 
-                evidence = result["evidence"]
+                else:
+
+                    st.subheader(
+                        "📚 Evidence Sources"
+                    )
 
                 pages = []
 
-                for r in (
-                    evidence["primary_evidence"]
-                    + evidence["supporting_evidence"]
-                ):
+                for result in results:
 
-                    page = r.get("page")
+                    page = result.get(
+                        "page"
+                    )
 
                     if page not in pages:
-                        pages.append(page)
+
+                        pages.append(
+                            page
+                        )
 
                 if pages:
 
                     page_text = " ".join(
-                        f'<span class="page-badge">Page {p}</span>'
+                        f'<span class="page-badge">'
+                        f'Page {p}'
+                        f'</span>'
                         for p in pages
                     )
 
@@ -705,51 +913,39 @@ if ask:
                     )
 
                 st.write(
-                    f"**Policy:** {DOCUMENT_NAME}"
+                    f"**Policy:** {document_name}"
                 )
 
                 st.write(
-                    f"**Version:** {VERSION}"
+                    f"**Version:** {version}"
                 )
 
                 st.write(
-                    f"**Effective Date:** {EFFECTIVE_DATE}"
+                    f"**Effective Date:** {effective_date}"
                 )
-
-                # ------------------------------------------------
-                # OPTIONAL EVIDENCE VIEW
-                # ------------------------------------------------
 
                 with st.expander(
                     "🔍 View Retrieved Evidence"
+                    if not is_urdu
+                    else
+                    "🔍 حاصل شدہ پالیسی شواہد دیکھیں"
                 ):
 
-                    for i, r in enumerate(
-                        evidence["primary_evidence"],
+                    for i, result in enumerate(
+                        results,
                         1
                     ):
 
                         st.markdown(
-                            f"### Primary Evidence {i} — "
-                            f"Page {r.get('page', 'N/A')}"
+                            f"### Evidence {i} — "
+                            f"Page {result.get('page', 'N/A')}"
                         )
 
                         st.write(
-                            r.get("text", "")
-                        )
-
-                    for i, r in enumerate(
-                        evidence["supporting_evidence"],
-                        1
-                    ):
-
-                        st.markdown(
-                            f"### Supporting Evidence {i} — "
-                            f"Page {r.get('page', 'N/A')}"
-                        )
-
-                        st.write(
-                            r.get("text", "")
+                            result.get(
+                                "text",
+                                ""
+                            )
                         )
 
             except Exception as e:
@@ -757,9 +953,14 @@ if ask:
                 st.error(
                     "An error occurred while processing "
                     "your question."
+                    if not is_urdu
+                    else
+                    "سوال پر کارروائی کے دوران خرابی پیش آئی۔"
                 )
 
-                st.exception(e)
+                st.exception(
+                    e
+                )
 
 
 # ============================================================
@@ -769,6 +970,6 @@ if ask:
 st.divider()
 
 st.caption(
-    "NADRA Registration Policy Assistant | "
-    f"{VERSION} | Effective {EFFECTIVE_DATE}"
+    "NADRA Policy Assistant | "
+    f"{version} | Effective {effective_date}"
 )
